@@ -3,7 +3,6 @@ package ru.arlen;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.batch.core.Job;
 import org.springframework.batch.core.Step;
-import org.springframework.batch.core.configuration.annotation.DefaultBatchConfigurer;
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing;
 import org.springframework.batch.core.configuration.annotation.JobBuilderFactory;
 import org.springframework.batch.core.configuration.annotation.StepBuilderFactory;
@@ -13,10 +12,14 @@ import org.springframework.batch.item.ItemStreamReader;
 import org.springframework.batch.item.database.JdbcBatchItemWriter;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.Resource;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.init.DataSourceInitializer;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import ru.arlen.model.SendoutLabOrder;
 import ru.arlen.model.SendoutPanelOrder;
 
@@ -29,21 +32,17 @@ import java.sql.ResultSet;
 @EnableBatchProcessing
 @ComponentScan(basePackages = { "ru.arlen" })
 @Slf4j
-public class BatchConfiguration extends DefaultBatchConfigurer {
-    @Override
-    public void setDataSource(DataSource dataSource) {
-        // override to do not set datasource even if a datasource exist.
-        // initialize will use a Map based JobRepository (instead of database)
-    }
+public class BatchConfiguration {
+    //    @Override
+    //    public void setDataSource(DataSource dataSource) {
+    //        // override to do not set datasource even if a datasource exist.
+    //        // initialize will use a Map based JobRepository (instead of database)
+    //    }
+    @Value("org/springframework/batch/core/schema-drop-mysql.sql")
+    private Resource dropRepositoryTables;
 
-    @Autowired
-    public JobBuilderFactory jobBuilderFactory;
-
-    @Autowired
-    public StepBuilderFactory stepBuilderFactory;
-
-    @Autowired
-    public DataSource dataSource;
+    @Value("org/springframework/batch/core/schema-mysql.sql")
+    private Resource dataRepositorySchema;
 
     @Bean
     public DataSource dataSource() {
@@ -56,19 +55,37 @@ public class BatchConfiguration extends DefaultBatchConfigurer {
     }
 
     @Bean
+    public DataSourceInitializer dataSourceInitializer(DataSource dataSource) {
+        ResourceDatabasePopulator databasePopulator = new ResourceDatabasePopulator();
+
+        databasePopulator.addScript(dropRepositoryTables);
+        databasePopulator.addScript(dataRepositorySchema);
+        databasePopulator.setIgnoreFailedDrops(true);
+
+        DataSourceInitializer initializer = new DataSourceInitializer();
+        initializer.setDataSource(dataSource);
+        initializer.setDatabasePopulator(databasePopulator);
+
+        return initializer;
+    }
+
+    @Autowired
+    public JobBuilderFactory jobBuilderFactory;
+
+    @Autowired
+    public StepBuilderFactory stepBuilderFactory;
+
+    @Autowired
+    public DataSource dataSource;
+
+    @Bean
     public Job importUserJob() {
-        return jobBuilderFactory.get("orderCreationJob")
-                .incrementer(new RunIdIncrementer())
-                .start(step1())
-                .next(step2())
-                .build();
+        return jobBuilderFactory.get("orderCreationJob").incrementer(new RunIdIncrementer()).start(step1()).next(step2()).build();
     }
 
     @Bean
     public Step step1() {
-        return stepBuilderFactory.get("createLabOrder")
-                .<SendoutPanelOrder, SendoutLabOrder>chunk(2)
-                .reader(reader1())
+        return stepBuilderFactory.get("createLabOrder").<SendoutPanelOrder, SendoutLabOrder>chunk(2).reader(reader1())
                 .processor(processor1())
                 .writer(writer1())
                 .build();
@@ -76,9 +93,7 @@ public class BatchConfiguration extends DefaultBatchConfigurer {
 
     @Bean
     public Step step2() {
-        return stepBuilderFactory.get("updatePanelOrder")
-                .<SendoutLabOrder, SendoutPanelOrder>chunk(100)
-                .reader(reader2())
+        return stepBuilderFactory.get("updatePanelOrder").<SendoutLabOrder, SendoutPanelOrder>chunk(100).reader(reader2())
                 .processor(processor2())
                 .writer(writer2())
                 .build();
